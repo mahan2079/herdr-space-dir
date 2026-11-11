@@ -1,0 +1,45 @@
+id = "space-dir"
+name = "Space Directory"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Choose directories for spaces and create workspaces directly in specific project folders"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "new-space"
+title = "New space in chosen directory"
+command = ["bash", "launch.sh", "--mode", "workspace"]
+
+[[actions]]
+id = "new-tab"
+title = "New tab in chosen directory"
+command = ["bash", "launch.sh", "--mode", "tab"]
+
+[[actions]]
+id = "change-dir"
+title = "Change current space directory"
+command = ["bash", "launch.sh", "--mode", "change"]
+
+[[panes]]
+id = "picker"
+title = "Choose Space Directory"
+placement = "popup"
+width = "85%"
+height = "80%"
+command = ["bash", "picker.sh", "--mode", "workspace"]
+
+[[panes]]
+id = "tab-picker"
+title = "Choose Tab Directory"
+placement = "popup"
+width = "85%"
+height = "80%"
+command = ["bash", "picker.sh", "--mode", "tab"]
+
+[[panes]]
+id = "change-picker"
+title = "Change Space Directory"
+placement = "popup"
+width = "85%"
+height = "80%"
+command = ["bash", "picker.sh", "--mode", "change"]
