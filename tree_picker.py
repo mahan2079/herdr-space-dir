@@ -2,7 +2,7 @@
 """
 Herdr Space Directory Tree Navigator
 Interactive directory tree explorer & workspace creator for Herdr.
-Supports internal/external drives, project bookmarks, search, and full mouse support.
+Supports internal/external drives, project bookmarks, direct path pasting, search, and full mouse support.
 """
 
 import sys
@@ -70,17 +70,21 @@ def discover_drives():
                             size = dev.get("size") or ""
                             label = dev.get("label")
 
+                            uuid_short = os.path.basename(mp)
+                            if len(uuid_short) > 16:
+                                uuid_short = uuid_short[:8] + "…"
+
                             if "512G" in (cur_model or "") or "476" in size or "477" in size:
-                                friendly_name = f"500GB Storage ({size})"
+                                friendly_name = f"500GB Storage ({size}) [{uuid_short}]"
                                 default_lbl = "500GB-Storage"
                             elif label:
                                 friendly_name = f"{label} ({size})" if size else label
                                 default_lbl = label
                             elif cur_model:
-                                friendly_name = f"{cur_model} ({size})" if size else cur_model
+                                friendly_name = f"{cur_model} ({size}) [{uuid_short}]" if size else cur_model
                                 default_lbl = os.path.basename(mp)
                             else:
-                                friendly_name = f"Storage ({size})" if size else os.path.basename(mp)
+                                friendly_name = f"Storage ({size}) [{uuid_short}]" if size else os.path.basename(mp)
                                 default_lbl = os.path.basename(mp)
 
                             icon = "🔌" if is_removable else "💾"
@@ -108,9 +112,10 @@ def discover_drives():
                         p = os.path.abspath(entry.path)
                         if p not in seen:
                             seen.add(p)
+                            uuid_short = entry.name[:8] + "…" if len(entry.name) > 16 else entry.name
                             drives.append({
                                 "path": p,
-                                "name": f"External Drive: {entry.name}",
+                                "name": f"External Drive: {uuid_short}",
                                 "label": entry.name,
                                 "icon": "🔌",
                                 "type": "external"
@@ -258,14 +263,16 @@ class TreeApp:
             node = TreeNode(d["path"], name=d["name"], icon=d["icon"], default_label=d["label"], depth=0)
             self.roots.append(node)
 
-        # Expand Home root by default
-        self.roots[0].expanded = True
-        self.roots[0].load_children(self.show_hidden)
+        # Pre-expand Home AND Secondary Storage drives so their project folders are immediately accessible
+        for r in self.roots:
+            if r.path != "/":
+                r.expanded = True
+                r.load_children(self.show_hidden)
 
         self.selected_index = 0
         self.scroll_offset = 0
         self.visible_nodes = []
-        self.preview_items_coords = []  # List of (y, name, is_dir) for click navigation in preview
+        self.preview_items_coords = []
 
         self.navigate_to_path(curr)
 
@@ -282,7 +289,6 @@ class TreeApp:
                 break
 
         if not matched_root:
-            # Fall back to root /
             matched_root = self.roots[-1]
 
         matched_root.expanded = True
@@ -293,6 +299,7 @@ class TreeApp:
         for i, node in enumerate(self.visible_nodes):
             if node.path == target:
                 self.selected_index = i
+                self.scroll_offset = max(0, i - 3)
                 break
 
     def _expand_path_down(self, node, target):
@@ -315,6 +322,13 @@ class TreeApp:
 
         if self.filter_query:
             q = self.filter_query.lower()
+            # If query matches, search both visible nodes and lazy-load child nodes
+            for r in self.roots:
+                if r.path != "/" and r.children:
+                    for child in r.children:
+                        if q in child.name.lower() or q in child.path.lower():
+                            r.expanded = True
+
             filtered = [n for n in nodes if q in n.name.lower() or q in n.path.lower()]
             self.visible_nodes = filtered if filtered else nodes
         else:
@@ -398,9 +412,10 @@ class TreeApp:
                     stdscr.addnstr(y, 0, line_str, tree_width - 1)
                     stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
                 else:
-                    stdscr.attron(curses.color_pair(1))
+                    color = curses.color_pair(3) if node.depth == 0 else curses.color_pair(1)
+                    stdscr.attron(color)
                     stdscr.addnstr(y, 0, line_str, tree_width - 1)
-                    stdscr.attroff(curses.color_pair(1))
+                    stdscr.attroff(color)
             except curses.error:
                 pass
 
@@ -493,7 +508,7 @@ class TreeApp:
         y = max_y - 2
         y_bottom = max_y - 1
 
-        help_text = " [Enter/Click] Choose  [→/Tab] Expand  [←] Collapse  [n] New Dir  [l] Label  [/] Filter  [q] Quit "
+        help_text = " [Enter/Click] Choose  [→/Tab] Expand  [←] Collapse  [p] Path  [n] New Dir  [l] Label  [f] FZF  [q] Quit "
         try:
             stdscr.attron(curses.color_pair(3))
             stdscr.addnstr(y, 0, help_text.ljust(max_x - 1), max_x - 1)
@@ -514,7 +529,7 @@ class TreeApp:
                 stdscr.addnstr(y_bottom, 0, f" {self.message}".ljust(max_x - 1), max_x - 1)
                 stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
             else:
-                bookmarks = " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "
+                bookmarks = " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 500GB Storage  [5] /  [.] Hidden "
                 stdscr.attron(curses.color_pair(5))
                 stdscr.addnstr(y_bottom, 0, bookmarks.ljust(max_x - 1), max_x - 1)
                 stdscr.attroff(curses.color_pair(5))
@@ -550,6 +565,19 @@ class TreeApp:
         label = custom_label or curr.default_label
         return (target_dir, label)
 
+    def jump_to_storage_drive(self):
+        home = os.path.expanduser("~")
+        for r in self.roots:
+            if "run/media" in r.path or "media" in r.path or r.path not in (home, "/"):
+                r.expanded = True
+                r.load_children(self.show_hidden)
+                self.navigate_to_path(r.path)
+                self.message = f"Jumped to Storage: {r.name}"
+                self.message_time = time.time()
+                return
+        self.message = "No external storage drive detected."
+        self.message_time = time.time()
+
     def handle_mouse(self, stdscr, max_y, max_x, tree_width):
         try:
             _, mx, my, _, bstate = curses.getmouse()
@@ -582,13 +610,11 @@ class TreeApp:
                 self.last_click_time = now
 
                 if is_double_click:
-                    # Double click = Select & Open Workspace!
                     self.selected_index = clicked_idx
                     return self.execute_choice(stdscr)
 
                 # Single click
                 if clicked_idx == self.selected_index:
-                    # Toggle expand/collapse on clicked item
                     node = self.visible_nodes[clicked_idx]
                     node.expanded = not node.expanded
                     if node.expanded:
@@ -619,12 +645,14 @@ class TreeApp:
                     curr.expanded = True
                     curr.load_children(self.show_hidden)
                     self.update_visible_nodes()
-            elif 37 <= mx <= 51: # Collapse
+            elif 37 <= mx <= 50: # Collapse
                 curr = self.current_node()
                 if curr and curr.expanded:
                     curr.expanded = False
                     self.update_visible_nodes()
-            elif 52 <= mx <= 64: # New Dir
+            elif 51 <= mx <= 61: # Path input
+                self.prompt_and_navigate_path(stdscr)
+            elif 62 <= mx <= 74: # New Dir
                 curr = self.current_node()
                 if curr:
                     new_name = self.prompt_input(stdscr, f"New directory inside '{curr.name}'")
@@ -644,33 +672,32 @@ class TreeApp:
                         except Exception as e:
                             self.message = f"Failed to create: {e}"
                             self.message_time = time.time()
-            elif 65 <= mx <= 75: # Label
+            elif 75 <= mx <= 84: # Label
                 curr = self.current_node()
                 if curr:
                     custom = self.prompt_input(stdscr, "Workspace Label", curr.default_label)
                     if custom:
                         return self.execute_choice(stdscr, custom_label=custom)
-            elif 76 <= mx <= 87: # Filter
-                self.filter_mode = True
-            elif 88 <= mx <= 98: # Quit
+            elif 85 <= mx <= 93: # FZF
+                return ("__FZF__", self.mode)
+            elif 94 <= mx <= 104: # Quit
                 return "__CANCEL__"
             return None
 
         # 6. Left Click on Bookmarks (row max_y - 1)
         if my == max_y - 1:
-            if "1" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+            token = self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 500GB Storage  [5] /  [.] Hidden ")
+            if "1" in token:
                 self.navigate_to_path(os.path.expanduser("~"))
-            elif "2" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+            elif "2" in token:
                 self.navigate_to_path(os.path.expanduser("~/Work"))
-            elif "3" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+            elif "3" in token:
                 self.navigate_to_path(os.path.expanduser("~/Projects"))
-            elif "4" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
-                # Jump to secondary storage (500GB drive or external)
-                if len(self.roots) > 2:
-                    self.navigate_to_path(self.roots[1].path)
-            elif "5" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+            elif "4" in token:
+                self.jump_to_storage_drive()
+            elif "5" in token:
                 self.navigate_to_path("/")
-            elif "." in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+            elif "." in token:
                 self.show_hidden = not self.show_hidden
                 for r in self.roots:
                     r.load_children(self.show_hidden)
@@ -682,18 +709,29 @@ class TreeApp:
     def get_clicked_token(self, mx, line):
         if mx >= len(line):
             return ""
-        # Find which bracketed token
         start = line.rfind("[", 0, mx + 1)
         end = line.find("]", mx)
         if start != -1 and end != -1:
             return line[start:end + 1]
         return ""
 
+    def prompt_and_navigate_path(self, stdscr):
+        curr_p = self.current_node().path if self.current_node() else ""
+        p_in = self.prompt_input(stdscr, "Enter or paste directory path", curr_p)
+        if p_in:
+            target = os.path.abspath(os.path.expanduser(p_in.strip()))
+            if os.path.isdir(target):
+                self.navigate_to_path(target)
+                self.message = f"Navigated to: {target}"
+                self.message_time = time.time()
+            else:
+                self.message = f"Path not found: {target}"
+                self.message_time = time.time()
+
     def run(self, stdscr):
         curses.curs_set(0)
         curses.use_default_colors()
 
-        # Enable full mouse capture
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
 
         curses.init_pair(1, curses.COLOR_BLUE, -1)
@@ -842,6 +880,9 @@ class TreeApp:
                 if res:
                     return res
 
+            elif ch in (ord('p'), ord('P')):  # Enter or Paste Direct Path
+                self.prompt_and_navigate_path(stdscr)
+
             elif ch in (ord('L'), ord('l')):  # Custom Label
                 curr = self.current_node()
                 if curr:
@@ -894,8 +935,7 @@ class TreeApp:
             elif ch == ord('3'):
                 self.navigate_to_path(os.path.expanduser("~/Projects"))
             elif ch == ord('4'):
-                if len(self.roots) > 2:
-                    self.navigate_to_path(self.roots[1].path)
+                self.jump_to_storage_drive()
             elif ch == ord('5'):
                 self.navigate_to_path("/")
 
