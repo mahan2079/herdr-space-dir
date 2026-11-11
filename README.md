@@ -83,31 +83,14 @@ herdr plugin link ./herdr-space-dir
 
 ---
 
-## ⌨️ Keybindings Setup
+## ⌨️ How It Works
 
-To make `prefix + shift + c` (or your preferred workspace key) open the directory tree picker instead of creating an empty workspace in `~`, configure `~/.config/herdr/config.toml`:
+You can trigger the Tree Directory Navigator in two ways:
 
-```toml
-[keys]
-# Disable the built-in blank workspace creation
-new_workspace = ""
+1. **Mouse Click in Sidebar**: Click `+ new workspace` beside **spaces** in Herdr's sidebar. The plugin intercepts the new workspace event and immediately opens the tree popup to let you choose where to root the space.
+2. **Keyboard Shortcut**: Press `prefix + shift + c` (default prefix is `ctrl+a`, so `ctrl+a shift+c`) to open the directory tree directly.
 
-# Bind your workspace key to the space-dir plugin
-[[keys.command]]
-key = "prefix+shift+c"
-type = "plugin_action"
-command = "space-dir.new-space"
-description = "new space in chosen directory"
-
-# (Optional) Bind a key to open a new tab in a chosen directory
-[[keys.command]]
-key = "prefix+shift+t"
-type = "plugin_action"
-command = "space-dir.new-tab"
-description = "new tab in chosen directory"
-```
-
-Reload Herdr configuration without restarting panes:
+Reload Herdr configuration after modifying keybindings:
 
 ```bash
 herdr server reload-config

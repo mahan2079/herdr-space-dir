@@ -20,6 +20,10 @@ id = "change-dir"
 title = "Change current space directory"
 command = ["bash", "launch.sh", "--mode", "change"]
 
+[[events]]
+on = "workspace.created"
+command = ["bash", "on_workspace_created.sh"]
+
 [[panes]]
 id = "picker"
 title = "Choose Space Directory"

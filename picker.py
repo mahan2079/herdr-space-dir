@@ -288,7 +288,34 @@ def main():
             readline.set_startup_hook(None)
 
     # Perform creation / change
+    target_workspace_id = os.environ.get("HERDR_TARGET_WORKSPACE_ID")
+    if target_workspace_id:
+        pane_id = None
+        try:
+            res = subprocess.run([herdr_bin, "pane", "list", "--workspace", target_workspace_id], capture_output=True, text=True)
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                panes = data.get("result", {}).get("panes", [])
+                if panes:
+                    pane_id = panes[0].get("pane_id")
+        except Exception:
+            pass
+
+        if pane_id:
+            subprocess.run([herdr_bin, "pane", "run", pane_id, f"cd {shlex.quote(target_dir)} && clear"], check=True)
+        if label != "~":
+            subprocess.run([herdr_bin, "workspace", "rename", target_workspace_id, label], check=False)
+        subprocess.run([herdr_bin, "workspace", "focus", target_workspace_id], check=False)
+        sys.exit(0)
+
     if mode == "workspace":
+        try:
+            import time
+            with open("/tmp/herdr_space_dir_ignore_create.tmp", "w") as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+
         cmd = [herdr_bin, "workspace", "create", "--cwd", target_dir, "--label", label, "--focus"]
         try:
             subprocess.run(cmd, check=True)
