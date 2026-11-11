@@ -94,12 +94,26 @@ def collect_candidates(context, config):
     for p in get_history():
         add_path(p)
 
-    # 3. Base directories in config
+    # 3. Discovered storage drives (500GB SSD, external drives)
+    from tree_picker import discover_drives
+    drives = discover_drives()
+    for d in drives:
+        add_path(d["path"])
+        # Add immediate subdirectories of secondary storage
+        if d["path"] != "/":
+            try:
+                for entry in sorted(os.listdir(d["path"])):
+                    if not entry.startswith(".") and entry != "lost+found":
+                        add_path(os.path.join(d["path"], entry))
+            except Exception:
+                pass
+
+    # 4. Base directories in config
     home = os.path.expanduser("~")
     for base in config.get("search_dirs", []):
         add_path(base)
 
-    # 4. Immediate subdirectories of ~/Work and ~/Projects
+    # 5. Immediate subdirectories of ~/Work and ~/Projects
     for base in [os.path.join(home, "Work"), os.path.join(home, "Projects")]:
         if os.path.isdir(base):
             try:
@@ -109,10 +123,11 @@ def collect_candidates(context, config):
             except Exception:
                 pass
 
-    # 5. Git repositories in search bases (depth <= 4)
-    search_roots = [os.path.expanduser(d) for d in config.get("search_dirs", []) if os.path.isdir(os.path.expanduser(d))]
+    # 6. Git repositories in search bases (depth <= 4)
+    drive_paths = [d["path"] for d in drives if d["path"] not in ("/", home)]
+    search_roots = [os.path.expanduser(d) for d in config.get("search_dirs", []) if os.path.isdir(os.path.expanduser(d))] + drive_paths
     try:
-        fd_cmd = ["fd", "-t", "d", "-H", r"^\.git$"] + search_roots + ["-d", "4", "-x", "dirname", "{}"]
+        fd_cmd = ["fd", "-t", "d", "-H", r"^\.git$", "-E", ".Trash*", "-E", "lost+found"] + search_roots + ["-d", "4", "-x", "dirname", "{}"]
         res = subprocess.run(fd_cmd, capture_output=True, text=True, timeout=3)
         if res.returncode == 0:
             for line in res.stdout.strip().splitlines():
@@ -124,7 +139,7 @@ def collect_candidates(context, config):
     depth = config.get("search_depth", 3)
     if depth > 1 and search_roots:
         try:
-            fd_cmd = ["fd", "-t", "d", "--max-depth", str(depth), "-E", "node_modules", "-E", ".venv", "-E", "__pycache__", "-E", ".git", "-E", ".cache", "-E", "dist", "-E", "build"] + search_roots
+            fd_cmd = ["fd", "-t", "d", "--max-depth", str(depth), "-E", "node_modules", "-E", ".venv", "-E", "__pycache__", "-E", ".git", "-E", ".cache", "-E", "dist", "-E", "build", "-E", ".Trash*", "-E", "lost+found"] + search_roots
             res = subprocess.run(fd_cmd, capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
                 for line in res.stdout.strip().splitlines():

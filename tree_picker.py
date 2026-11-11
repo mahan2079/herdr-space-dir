@@ -2,6 +2,7 @@
 """
 Herdr Space Directory Tree Navigator
 Interactive directory tree explorer & workspace creator for Herdr.
+Supports internal/external drives, project bookmarks, search, and full mouse support.
 """
 
 import sys
@@ -10,6 +11,7 @@ import shlex
 import subprocess
 import curses
 import time
+import json
 import traceback
 
 def get_herdr_bin():
@@ -25,29 +27,130 @@ def get_context():
     raw = os.environ.get("HERDR_PLUGIN_CONTEXT_JSON")
     if raw:
         try:
-            import json
             return json.loads(raw)
         except Exception:
             pass
     return {}
 
+def discover_drives():
+    """Discover Home, secondary internal storage (e.g. 500GB SSD), and external drives."""
+    drives = []
+    seen = set()
+    user = os.environ.get("USER", "mahan")
+    home = os.path.expanduser("~")
+
+    # 1. Primary Home drive
+    drives.append({
+        "path": home,
+        "name": "Home (~)",
+        "label": "~",
+        "icon": "🏠",
+        "type": "home"
+    })
+    seen.add(home)
+
+    # 2. Query lsblk for mounted storage partitions
+    try:
+        res = subprocess.run(
+            ["lsblk", "-J", "-o", "NAME,SIZE,TYPE,MOUNTPOINTS,LABEL,MODEL,RM"],
+            capture_output=True, text=True, timeout=2
+        )
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            def walk(dev, model=None):
+                cur_model = dev.get("model") or model
+                is_removable = dev.get("rm") in (True, 1, "1")
+                mps = dev.get("mountpoints") or []
+                if "mountpoint" in dev and dev["mountpoint"]:
+                    mps.append(dev["mountpoint"])
+                for mp in mps:
+                    if mp and mp not in ("/", "/boot", "[SWAP]", "/var/log", "/var/cache/pacman/pkg") and not mp.startswith("/home"):
+                        if os.path.isdir(mp) and mp not in seen:
+                            seen.add(mp)
+                            size = dev.get("size") or ""
+                            label = dev.get("label")
+
+                            if "512G" in (cur_model or "") or "476" in size or "477" in size:
+                                friendly_name = f"500GB Storage ({size})"
+                                default_lbl = "500GB-Storage"
+                            elif label:
+                                friendly_name = f"{label} ({size})" if size else label
+                                default_lbl = label
+                            elif cur_model:
+                                friendly_name = f"{cur_model} ({size})" if size else cur_model
+                                default_lbl = os.path.basename(mp)
+                            else:
+                                friendly_name = f"Storage ({size})" if size else os.path.basename(mp)
+                                default_lbl = os.path.basename(mp)
+
+                            icon = "🔌" if is_removable else "💾"
+                            drives.append({
+                                "path": mp,
+                                "name": friendly_name,
+                                "label": default_lbl,
+                                "icon": icon,
+                                "type": "external" if is_removable else "internal_secondary"
+                            })
+                for c in dev.get("children", []):
+                    walk(c, cur_model)
+
+            for d in data.get("blockdevices", []):
+                walk(d)
+    except Exception:
+        pass
+
+    # 3. Scan /run/media/$USER, /media/$USER, /media, /mnt for any additional mounted drives
+    for base in [f"/run/media/{user}", "/run/media", f"/media/{user}", "/media", "/mnt"]:
+        if os.path.isdir(base):
+            try:
+                for entry in os.scandir(base):
+                    if entry.is_dir(follow_symlinks=True) and entry.name != user:
+                        p = os.path.abspath(entry.path)
+                        if p not in seen:
+                            seen.add(p)
+                            drives.append({
+                                "path": p,
+                                "name": f"External Drive: {entry.name}",
+                                "label": entry.name,
+                                "icon": "🔌",
+                                "type": "external"
+                            })
+            except Exception:
+                pass
+
+    # 4. Root filesystem
+    drives.append({
+        "path": "/",
+        "name": "Root (/)",
+        "label": "root",
+        "icon": "📁",
+        "type": "root"
+    })
+
+    return drives
+
 class TreeNode:
-    def __init__(self, path, parent=None, depth=0):
+    def __init__(self, path, name=None, icon="📁", default_label=None, parent=None, depth=0):
         self.path = os.path.abspath(path)
         home = os.path.expanduser("~")
-        if self.path == home:
+        if name:
+            self.name = name
+        elif self.path == home:
             self.name = "~"
         elif self.path == "/":
             self.name = "/"
         else:
             self.name = os.path.basename(self.path) or self.path
+
+        self.default_label = default_label or (os.path.basename(self.path) if self.path != home else "~")
+        self.icon = icon
         self.parent = parent
         self.depth = depth
         self.expanded = False
-        self.children = None  # None indicates not loaded yet
+        self.children = None
         self.has_children = True
-        self.git_info = None  # Cached git info
-        self.contents_preview = None  # Cached contents preview
+        self.git_info = None
+        self.contents_preview = None
 
     def load_children(self, show_hidden=False):
         self.children = []
@@ -58,13 +161,13 @@ class TreeNode:
                     if entry.is_dir(follow_symlinks=False):
                         if not show_hidden and entry.name.startswith("."):
                             continue
-                        if entry.name in ("node_modules", ".venv", "__pycache__", ".git"):
+                        if entry.name in ("node_modules", ".venv", "__pycache__", ".git", "lost+found", ".Trash-1000"):
                             continue
                         entries.append(entry.name)
             entries.sort(key=lambda s: s.lower())
             for name in entries:
                 child_path = os.path.join(self.path, name)
-                self.children.append(TreeNode(child_path, parent=self, depth=self.depth + 1))
+                self.children.append(TreeNode(child_path, name=name, parent=self, depth=self.depth + 1))
             self.has_children = len(self.children) > 0
         except (PermissionError, FileNotFoundError):
             self.children = []
@@ -121,7 +224,7 @@ class TreeNode:
                 for entry in it:
                     if not show_hidden and entry.name.startswith("."):
                         continue
-                    if entry.name in ("node_modules", ".venv", "__pycache__"):
+                    if entry.name in ("node_modules", ".venv", "__pycache__", "lost+found", ".Trash-1000"):
                         continue
                     items.append((entry.is_dir(), entry.name))
             items.sort(key=lambda x: (not x[0], x[1].lower()))
@@ -141,30 +244,50 @@ class TreeApp:
         self.message = ""
         self.message_time = 0
 
+        # Click tracking for double click detection
+        self.last_click_idx = -1
+        self.last_click_time = 0
+
         home = os.path.expanduser("~")
         curr = start_dir or self.context.get("focused_pane_cwd") or self.context.get("workspace_cwd") or home
 
-        # Single primary root: ~
-        self.root = TreeNode(home)
-        self.root.expanded = True
-        self.root.load_children(self.show_hidden)
+        # Discover all available drives (Home, 500GB internal storage, USB drives, etc.)
+        self.drives = discover_drives()
+        self.roots = []
+        for d in self.drives:
+            node = TreeNode(d["path"], name=d["name"], icon=d["icon"], default_label=d["label"], depth=0)
+            self.roots.append(node)
+
+        # Expand Home root by default
+        self.roots[0].expanded = True
+        self.roots[0].load_children(self.show_hidden)
 
         self.selected_index = 0
         self.scroll_offset = 0
         self.visible_nodes = []
+        self.preview_items_coords = []  # List of (y, name, is_dir) for click navigation in preview
+
         self.navigate_to_path(curr)
 
     def navigate_to_path(self, target_path):
         target = os.path.abspath(os.path.expanduser(target_path))
-        home = os.path.expanduser("~")
 
-        if not target.startswith(self.root.path):
-            # Target is outside current root (e.g. /), switch root
-            self.root = TreeNode(target if os.path.isdir(target) else "/")
-            self.root.expanded = True
-            self.root.load_children(self.show_hidden)
-        else:
-            self._expand_path_down(self.root, target)
+        # Find which root contains this target
+        matched_root = None
+        for r in self.roots:
+            if r.path == "/" and target != "/":
+                continue
+            if target == r.path or target.startswith(r.path.rstrip("/") + "/"):
+                matched_root = r
+                break
+
+        if not matched_root:
+            # Fall back to root /
+            matched_root = self.roots[-1]
+
+        matched_root.expanded = True
+        matched_root.load_children(self.show_hidden)
+        self._expand_path_down(matched_root, target)
 
         self.update_visible_nodes()
         for i, node in enumerate(self.visible_nodes):
@@ -173,20 +296,23 @@ class TreeApp:
                 break
 
     def _expand_path_down(self, node, target):
-        if not target.startswith(node.path):
+        if node.path == target:
+            return
+        if not target.startswith(node.path.rstrip("/") + "/"):
             return
         node.expanded = True
         node.load_children(self.show_hidden)
-        if node.path == target:
-            return
         if node.children:
             for c in node.children:
-                if target == c.path or target.startswith(c.path + "/"):
+                if target == c.path or target.startswith(c.path.rstrip("/") + "/"):
                     self._expand_path_down(c, target)
                     break
 
     def update_visible_nodes(self):
-        nodes = self.root.get_visible_nodes()
+        nodes = []
+        for r in self.roots:
+            nodes.extend(r.get_visible_nodes())
+
         if self.filter_query:
             q = self.filter_query.lower()
             filtered = [n for n in nodes if q in n.name.lower() or q in n.path.lower()]
@@ -222,12 +348,7 @@ class TreeApp:
 
             curr = self.current_node()
             if curr and max_x > 10:
-                home = os.path.expanduser("~")
-                disp = curr.path
-                if disp.startswith(home):
-                    disp = "~" + disp[len(home):]
-                parts = [p for p in disp.split("/") if p]
-                crumb = " 📂 " + " › ".join(parts if parts else ["/"])
+                crumb = f" {curr.icon} {curr.path}"
                 stdscr.attron(curses.color_pair(4))
                 stdscr.addnstr(1, 0, crumb.ljust(max_x - 1), max_x - 1)
                 stdscr.attroff(curses.color_pair(4))
@@ -268,7 +389,7 @@ class TreeApp:
                 arrow = "▸" if node.has_children else " "
 
             indent = "  " * node.depth
-            line_content = f"{indent}{arrow} 📁 {node.name}"
+            line_content = f"{indent}{arrow} {node.icon} {node.name}"
             line_str = f" {line_content}".ljust(tree_width - 1)[:tree_width - 1]
 
             try:
@@ -288,6 +409,7 @@ class TreeApp:
         if preview_width < 10:
             return
 
+        self.preview_items_coords = []
         curr = self.current_node()
 
         # Vertical separator
@@ -313,9 +435,8 @@ class TreeApp:
                 stdscr.addnstr(p_y, start_x + 1, f"Path: {curr.path}", preview_width)
                 p_y += 1
 
-            label = "~" if curr.path == os.path.expanduser("~") else os.path.basename(curr.path)
             if p_y < max_y - 2:
-                stdscr.addnstr(p_y, start_x + 1, f"Space Label: {label}", preview_width)
+                stdscr.addnstr(p_y, start_x + 1, f"Space Label: {curr.default_label}", preview_width)
                 p_y += 2
 
             # Git Status
@@ -349,7 +470,7 @@ class TreeApp:
 
             if p_y < max_y - 2:
                 stdscr.attron(curses.A_BOLD)
-                stdscr.addnstr(p_y, start_x + 1, "Contents:", preview_width)
+                stdscr.addnstr(p_y, start_x + 1, "Contents (click to step in):", preview_width)
                 stdscr.attroff(curses.A_BOLD)
                 p_y += 1
 
@@ -363,6 +484,7 @@ class TreeApp:
                 stdscr.attron(color)
                 stdscr.addnstr(p_y, start_x + 1, f"{icon}{name}", preview_width)
                 stdscr.attroff(color)
+                self.preview_items_coords.append((p_y, name, is_dir))
                 p_y += 1
         except curses.error:
             pass
@@ -371,7 +493,7 @@ class TreeApp:
         y = max_y - 2
         y_bottom = max_y - 1
 
-        help_text = " [Enter/Space] Choose  [→/Tab] Expand  [←] Collapse  [n] New Dir  [l] Label  [/] Filter  [q] Quit "
+        help_text = " [Enter/Click] Choose  [→/Tab] Expand  [←] Collapse  [n] New Dir  [l] Label  [/] Filter  [q] Quit "
         try:
             stdscr.attron(curses.color_pair(3))
             stdscr.addnstr(y, 0, help_text.ljust(max_x - 1), max_x - 1)
@@ -392,7 +514,7 @@ class TreeApp:
                 stdscr.addnstr(y_bottom, 0, f" {self.message}".ljust(max_x - 1), max_x - 1)
                 stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
             else:
-                bookmarks = " Bookmarks: [1] ~  [2] ~/Work  [3] ~/Projects  [4] Root /  [.] Hidden Dirs "
+                bookmarks = " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "
                 stdscr.attron(curses.color_pair(5))
                 stdscr.addnstr(y_bottom, 0, bookmarks.ljust(max_x - 1), max_x - 1)
                 stdscr.attroff(curses.color_pair(5))
@@ -425,18 +547,154 @@ class TreeApp:
             return None
 
         target_dir = curr.path
-        home = os.path.expanduser("~")
-        if target_dir == home:
-            default_label = "~"
-        else:
-            default_label = os.path.basename(target_dir)
-
-        label = custom_label or default_label
+        label = custom_label or curr.default_label
         return (target_dir, label)
+
+    def handle_mouse(self, stdscr, max_y, max_x, tree_width):
+        try:
+            _, mx, my, _, bstate = curses.getmouse()
+        except curses.error:
+            return None
+
+        # 1. Mouse wheel UP
+        if bstate & (curses.BUTTON4_PRESSED | 65536):
+            if self.selected_index > 0:
+                self.selected_index = max(0, self.selected_index - 1)
+            return None
+
+        # 2. Mouse wheel DOWN
+        if bstate & (curses.BUTTON5_PRESSED | 2097152):
+            if self.selected_index < len(self.visible_nodes) - 1:
+                self.selected_index = min(len(self.visible_nodes) - 1, self.selected_index + 1)
+            return None
+
+        # 3. Left Click on Tree Area
+        if my in range(2, max_y - 2) and mx < tree_width:
+            row_offset = my - 2
+            clicked_idx = self.scroll_offset + row_offset
+            if 0 <= clicked_idx < len(self.visible_nodes):
+                now = time.time()
+                is_double_click = bool(
+                    (bstate & curses.BUTTON1_DOUBLE_CLICKED) or
+                    (clicked_idx == self.last_click_idx and (now - self.last_click_time) < 0.4)
+                )
+                self.last_click_idx = clicked_idx
+                self.last_click_time = now
+
+                if is_double_click:
+                    # Double click = Select & Open Workspace!
+                    self.selected_index = clicked_idx
+                    return self.execute_choice(stdscr)
+
+                # Single click
+                if clicked_idx == self.selected_index:
+                    # Toggle expand/collapse on clicked item
+                    node = self.visible_nodes[clicked_idx]
+                    node.expanded = not node.expanded
+                    if node.expanded:
+                        node.load_children(self.show_hidden)
+                    self.update_visible_nodes()
+                else:
+                    self.selected_index = clicked_idx
+            return None
+
+        # 4. Left Click on Preview Area (click on folder to step in)
+        if my in range(2, max_y - 2) and mx >= tree_width:
+            curr = self.current_node()
+            if curr:
+                for p_y, name, is_dir in self.preview_items_coords:
+                    if my == p_y and is_dir:
+                        sub_path = os.path.join(curr.path, name)
+                        self.navigate_to_path(sub_path)
+                        break
+            return None
+
+        # 5. Left Click on Footer Action Buttons (row max_y - 2)
+        if my == max_y - 2:
+            if 1 <= mx <= 21: # Choose
+                return self.execute_choice(stdscr)
+            elif 22 <= mx <= 36: # Expand
+                curr = self.current_node()
+                if curr and not curr.expanded:
+                    curr.expanded = True
+                    curr.load_children(self.show_hidden)
+                    self.update_visible_nodes()
+            elif 37 <= mx <= 51: # Collapse
+                curr = self.current_node()
+                if curr and curr.expanded:
+                    curr.expanded = False
+                    self.update_visible_nodes()
+            elif 52 <= mx <= 64: # New Dir
+                curr = self.current_node()
+                if curr:
+                    new_name = self.prompt_input(stdscr, f"New directory inside '{curr.name}'")
+                    if new_name:
+                        new_path = os.path.join(curr.path, new_name)
+                        try:
+                            os.makedirs(new_path, exist_ok=True)
+                            curr.expanded = True
+                            curr.load_children(self.show_hidden)
+                            self.update_visible_nodes()
+                            for i, n in enumerate(self.visible_nodes):
+                                if n.path == new_path:
+                                    self.selected_index = i
+                                    break
+                            self.message = f"Created directory: {new_name}"
+                            self.message_time = time.time()
+                        except Exception as e:
+                            self.message = f"Failed to create: {e}"
+                            self.message_time = time.time()
+            elif 65 <= mx <= 75: # Label
+                curr = self.current_node()
+                if curr:
+                    custom = self.prompt_input(stdscr, "Workspace Label", curr.default_label)
+                    if custom:
+                        return self.execute_choice(stdscr, custom_label=custom)
+            elif 76 <= mx <= 87: # Filter
+                self.filter_mode = True
+            elif 88 <= mx <= 98: # Quit
+                return "__CANCEL__"
+            return None
+
+        # 6. Left Click on Bookmarks (row max_y - 1)
+        if my == max_y - 1:
+            if "1" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                self.navigate_to_path(os.path.expanduser("~"))
+            elif "2" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                self.navigate_to_path(os.path.expanduser("~/Work"))
+            elif "3" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                self.navigate_to_path(os.path.expanduser("~/Projects"))
+            elif "4" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                # Jump to secondary storage (500GB drive or external)
+                if len(self.roots) > 2:
+                    self.navigate_to_path(self.roots[1].path)
+            elif "5" in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                self.navigate_to_path("/")
+            elif "." in self.get_clicked_token(mx, " Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden "):
+                self.show_hidden = not self.show_hidden
+                for r in self.roots:
+                    r.load_children(self.show_hidden)
+                self.update_visible_nodes()
+            return None
+
+        return None
+
+    def get_clicked_token(self, mx, line):
+        if mx >= len(line):
+            return ""
+        # Find which bracketed token
+        start = line.rfind("[", 0, mx + 1)
+        end = line.find("]", mx)
+        if start != -1 and end != -1:
+            return line[start:end + 1]
+        return ""
 
     def run(self, stdscr):
         curses.curs_set(0)
         curses.use_default_colors()
+
+        # Enable full mouse capture
+        curses.mousemask(curses.ALL_MOUSE_EVENTS)
 
         curses.init_pair(1, curses.COLOR_BLUE, -1)
         curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
@@ -473,7 +731,16 @@ class TreeApp:
             if ch == -1:
                 continue
 
-            # CRITICAL: Handle Escape sequences (Focus In/Out \033[I, mouse reports, etc.)
+            # MOUSE EVENT HANDLING
+            if ch == curses.KEY_MOUSE:
+                res = self.handle_mouse(stdscr, max_y, max_x, tree_width)
+                if res == "__CANCEL__":
+                    break
+                elif res:
+                    return res
+                continue
+
+            # Handle Escape sequences (focus in/out \033[I, mouse reports, etc.)
             if ch == 27:
                 stdscr.nodelay(True)
                 seq = []
@@ -485,10 +752,8 @@ class TreeApp:
                 stdscr.nodelay(False)
 
                 if seq:
-                    # Ignore escape sequence (like \033[I focus gained)
                     continue
                 else:
-                    # Standalone Escape key!
                     if self.filter_mode:
                         self.filter_mode = False
                         self.filter_query = ""
@@ -502,7 +767,7 @@ class TreeApp:
 
             # Handle search/filter mode typing
             if self.filter_mode:
-                if ch in (10, 13):  # Enter
+                if ch in (10, 13):
                     self.filter_mode = False
                 elif ch in (curses.KEY_BACKSPACE, 127, 8):
                     if self.filter_query:
@@ -580,8 +845,7 @@ class TreeApp:
             elif ch in (ord('L'), ord('l')):  # Custom Label
                 curr = self.current_node()
                 if curr:
-                    def_lbl = "~" if curr.path == os.path.expanduser("~") else os.path.basename(curr.path)
-                    custom = self.prompt_input(stdscr, "Workspace Label", def_lbl)
+                    custom = self.prompt_input(stdscr, "Workspace Label", curr.default_label)
                     if custom:
                         res = self.execute_choice(stdscr, custom_label=custom)
                         if res:
@@ -613,7 +877,8 @@ class TreeApp:
 
             elif ch in (ord('.'), ord('H')):  # Toggle hidden files
                 self.show_hidden = not self.show_hidden
-                self.root.load_children(self.show_hidden)
+                for r in self.roots:
+                    r.load_children(self.show_hidden)
                 self.update_visible_nodes()
                 self.message = f"Show hidden directories: {'ON' if self.show_hidden else 'OFF'}"
                 self.message_time = time.time()
@@ -629,7 +894,8 @@ class TreeApp:
             elif ch == ord('3'):
                 self.navigate_to_path(os.path.expanduser("~/Projects"))
             elif ch == ord('4'):
-                self.navigate_to_path(os.path.expanduser("~/.config"))
+                if len(self.roots) > 2:
+                    self.navigate_to_path(self.roots[1].path)
             elif ch == ord('5'):
                 self.navigate_to_path("/")
 

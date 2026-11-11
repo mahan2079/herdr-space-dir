@@ -5,56 +5,62 @@
 
 An interactive, visual directory tree explorer and workspace creator plugin for [Herdr](https://herdr.dev).
 
-By default, Herdr initializes new workspaces in `~`. **`herdr-space-dir`** replaces the default blank workspace creation with a centered, interactive tree GUI that lets you explore project folders, inspect live Git details, and start workspaces directly inside the intended project directory.
+By default, Herdr initializes new workspaces in `~`. **`herdr-space-dir`** replaces the default blank workspace creation with a centered, interactive tree GUI that lets you explore project folders across all storage drives (including secondary internal SSDs and external USB drives), inspect live Git details, and start workspaces directly inside the intended project directory with full mouse and keyboard support.
 
 ```text
  🌲 HERDR SPACE DIRECTORY NAVIGATOR                   [WORKSPACE MODE] 
- 📂 ~ › Work › marker
- ▾ 📁 ~                                  │ DETAILS & PREVIEW
-   ▸ 📁 Documents                         │ Path: /home/mahan/Work/marker
-   ▸ 📁 Downloads                         │ Space Label: marker
-   ▸ 📁 Projects                          │
-   ▼ 📁 Work                              │ Git Branch: master
-     ▸ 📁 jev-ultrafast-service           │ Last Commit: 71dd5fd Merge PR #1136
-     ▸ 📁 kev                             │ Changes: 2 modified files
-     ▼ 📁 marker                          │──────────────────────────────────────
-       ▸ 📁 benchmarks                    │ Contents:
-       ▸ 📁 data                          │ 📁 benchmarks
-       ▸ 📁 docker                        │ 📁 data
-       ▸ 📁 marker                        │ 📁 docker
-   ▸ 📁 Videos                            │ 📄 README.md
+ 📂 💾 /run/media/mahan/1346aaae-0bbc-4cd9-a864-c589acdc572b/Isilcorp
+ ▼ 🏠 Home (~)                           │ DETAILS & PREVIEW
+   ▸ 📁 Work                              │ Path: /run/media/.../Isilcorp
+   ▸ 📁 Projects                          │ Space Label: Isilcorp
+ ▼ 💾 500GB Storage (476.9G)              │
+   ▸ 📁 AI courses                        │ Git Branch: master
+   ▸ 📁 Aspects of Life                   │ Last Commit: 3f1a0e2 Updated ERP config
+   ▼ 📁 Isilcorp                          │ Changes: Working tree clean
+     ▸ 📁 ERP                             │──────────────────────────────────────
+     ▸ 📁 clients                         │ Contents (click to step in):
+     ▸ 📁 internal-tools                  │ 📁 ERP
+   ▸ 📁 phd studies                       │ 📁 clients
+   ▸ 📁 the-complete-web-dev...           │ 📁 internal-tools
+ ▶ 📁 Root (/)                            │ 📄 README.md
 ──────────────────────────────────────────────────────────────────────────
- [Enter/Space] Choose  [→/Tab] Expand  [←] Collapse  [n] New Dir  [l] Label  [/] Filter  [q] Quit 
- Bookmarks: [1] ~  [2] ~/Work  [3] ~/Projects  [4] Root /  [.] Hidden Dirs 
+ [Enter/Click] Choose  [→/Tab] Expand  [←] Collapse  [n] New Dir  [l] Label  [/] Filter  [q] Quit 
+ Bookmarks: [1] ~  [2] Work  [3] Projects  [4] 💾 Storage  [5] /  [.] Hidden 
 ```
 
 ---
 
 ## ✨ Features
 
-- **🌳 Interactive Directory Tree**:
+- **🌳 Interactive Multi-Drive Directory Tree**:
+  - Automatically discovers all storage partitions: Home `~`, secondary internal drives (e.g. 500GB SSD), and any connected external USB / SSD drives.
   - Full hierarchical folder tree with expand/collapse indicators (`▼` / `▶` / `📁`).
-  - Smooth navigation with arrow keys or vim keys (`j`/`k` for vertical movement, `l`/`→` to expand, `h`/`←` to collapse or jump to parent).
   - Fast, lazy-loaded folder scanning (only scans directories upon expansion, automatically skipping heavy directories like `node_modules`, `.venv`, `.git`, and `__pycache__`).
+- **🖱️ Full Mouse Support**:
+  - **Single Click**: Select a folder or drive. Click on an already-selected row (or its arrow) to expand or collapse.
+  - **Double Click**: Double-click on any folder to immediately create and open a Herdr space inside it.
+  - **Mouse Wheel**: Scroll up and down smoothly through the directory tree.
+  - **Clickable Preview**: Click on any subfolder listed in the `Contents:` preview panel to step directly into it.
+  - **Clickable Action Buttons**: Click footer buttons (`[Choose]`, `[Expand]`, `[Collapse]`, `[New Dir]`, `[Label]`, `[Filter]`, `[Quit]`) and bookmark pills directly with the mouse.
 - **📊 Live Details & Preview Panel**:
   - Displays full path and default space label.
   - Live Git information: active branch, last commit summary, and dirty/modified file counts.
   - Formatted file & directory preview of the highlighted folder.
 - **⚡ One-Key Workspace Creation**:
-  - Press `Enter` or `Space` on any folder to immediately create and focus a Herdr space rooted in that directory, using the directory name as the workspace label.
+  - Press `Enter` or `Space` (or double-click) on any folder to immediately create and focus a Herdr space rooted in that directory, using the directory name as the workspace label.
 - **🏷️ Custom Space Labels**:
-  - Press `l` or `L` to edit or customize the workspace label with an inline prompt before opening.
+  - Press `l` or `L` (or click `[l] Label`) to edit or customize the workspace label with an inline prompt before opening.
 - **📁 Create Subfolders on the Fly**:
-  - Press `n` or `N` to create a new folder under the currently selected directory and instantly open a workspace inside it.
+  - Press `n` or `N` (or click `[n] New Dir`) to create a new folder under the currently selected directory and instantly open a workspace inside it.
 - **🔍 Real-Time Filter & Search**:
-  - Press `/` to search and filter visible tree nodes in real time.
+  - Press `/` (or click `[/] Filter`) to search and filter visible tree nodes in real time.
 - **⚡ FZF Fuzzy Finder Integration**:
-  - Press `f` in the tree view to switch into an ultra-fast `fzf` fuzzy finder across all discovered project folders.
+  - Press `f` in the tree view to switch into an ultra-fast `fzf` fuzzy finder across all discovered project folders (including the 500GB drive and external drives).
   - Press `Ctrl-T` inside fuzzy mode to jump straight back to the tree explorer.
 - **🔖 Quick-Jump Bookmarks**:
-  - Jump instantly to common project roots: `1` for `~`, `2` for `~/Work`, `3` for `~/Projects`, `4` for `~/.config`, `5` for `/`.
+  - Jump instantly to common project roots: `1` for `~`, `2` for `~/Work`, `3` for `~/Projects`, `4` for `💾 Storage` (500GB / external drive), `5` for `/`.
 - **👁️ Toggle Hidden Folders**:
-  - Press `.` or `H` to toggle hidden dot-directories.
+  - Press `.` or `H` (or click `[.] Hidden`) to toggle hidden dot-directories.
 - **🪶 Zero Pip Dependencies**:
   - Pure Python + Curses standard library implementation. Runs out of the box on Linux and macOS without extra packages.
 
@@ -111,6 +117,8 @@ herdr server reload-config
 
 ## 🎮 Tree Navigator Controls
 
+### Keyboard Controls
+
 | Key | Action |
 |---|---|
 | `↑` / `k` | Move cursor up |
@@ -123,11 +131,22 @@ herdr server reload-config
 | `n` / `N` | Create new subfolder under current selection |
 | `/` | Live search / filter tree nodes |
 | `f` | Switch to `fzf` fuzzy search mode |
-| `1` – `5` | Quick-jump bookmarks (`~`, `Work`, `Projects`, `.config`, `/`) |
+| `1` – `5` | Quick-jump bookmarks (`~`, `Work`, `Projects`, `💾 Storage`, `/`) |
 | `.` or `H` | Toggle hidden directories on / off |
 | `PageUp` / `PageDown` | Scroll 15 lines up / down |
 | `g` / `G` | Jump to top / bottom |
 | `q` or `Esc` | Cancel and exit without creating anything |
+
+### Mouse Controls
+
+| Gesture | Action |
+|---|---|
+| **Left Click** | Select folder; click an already selected folder (or arrow) to toggle expand/collapse |
+| **Double Click** | **Immediately open workspace in the clicked folder** |
+| **Mouse Wheel** | Scroll up and down through the directory tree |
+| **Click on Preview** | Click any subfolder in the `Contents:` list to step into it |
+| **Click on Footer** | Click any button (`[Choose]`, `[Expand]`, `[Collapse]`, `[New Dir]`, `[Label]`, `[Filter]`, `[Quit]`) |
+| **Click on Bookmark** | Click any bookmark (`[1] ~`, `[2] Work`, `[3] Projects`, `[4] 💾 Storage`, `[5] /`, `[.] Hidden`) |
 
 ---
 
